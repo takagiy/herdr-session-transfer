@@ -1,12 +1,12 @@
 # herdr-session-transfer
 
-A [herdr](https://herdr.dev) plugin that moves the conversation in a pane to another coding agent, in the same pane. Start a task in Claude Code, and continue the same conversation in Codex without leaving the pane, or the other way around.
+A [herdr](https://herdr.dev) plugin that transfers the session in a pane to another coding agent, in the same pane. Start a task in Claude Code, and continue the same conversation in Codex without leaving the pane, or the other way around.
 
 ## Usage
 
 Supported agents: Claude Code and Codex.
 
-In the agent's pane, press the key bound in [Install](#install) and choose the agent to move to. The plugin then:
+In the agent's pane, press the key bound in [Install](#install) and choose the agent to transfer to. The plugin then:
 
 1. Copies the conversation into the chosen agent as a new session. The original session is not changed, so you can still resume it later.
 2. Stops the agent in the pane, even if it is in the middle of a task.
@@ -36,7 +36,7 @@ Then bind a key to the plugin's `transfer` action in `~/.config/herdr/config.tom
 key = "prefix+m"
 type = "plugin_action"
 command = "herdr-session-transfer.transfer"
-description = "move this pane's conversation to another agent"
+description = "transfer this pane's session to another agent"
 ```
 
 and reload the config:

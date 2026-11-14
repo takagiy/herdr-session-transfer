@@ -1,4 +1,4 @@
-//! Moving the conversation in one pane to another harness, in that pane.
+//! Transferring the session in one pane to another harness, in that pane.
 
 use std::path::{Path, PathBuf};
 use txcript::HarnessId;
