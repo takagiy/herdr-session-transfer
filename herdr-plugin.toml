@@ -1,0 +1,24 @@
+id = "herdr-session-transfer"
+name = "Session transfer"
+version = "0.1.0"
+min_herdr_version = "0.9.4"
+description = "Transfer an agent session to another harness in the same pane."
+platforms = ["linux", "macos", "windows"]
+
+[[build]]
+command = ["cargo", "build", "--release", "--locked"]
+
+[[actions]]
+id = "transfer"
+title = "Transfer session"
+description = "Choose a harness and continue this pane's agent session there."
+contexts = ["pane"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-session-transfer", "--entrypoint", "picker"]
+
+[[panes]]
+id = "picker"
+title = "Transfer session"
+placement = "popup"
+width = 44
+height = 9
+command = ["target/release/herdr-session-transfer"]
