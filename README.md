@@ -17,7 +17,7 @@ The conversion between agents is done by [txcript](https://github.com/skillsynch
 ## Requirements
 
 - herdr 0.9.4 or later.
-- herdr's integration for each agent you use (`herdr integration install <agent>`), so herdr knows which session a pane holds.
+- herdr's integration for each agent you use (`herdr integration install <agent>`).
 - Each agent's CLI on your `PATH`.
 - A recent stable Rust toolchain (`cargo`). herdr builds the plugin when you install it.
 
@@ -27,7 +27,6 @@ The conversion between agents is done by [txcript](https://github.com/skillsynch
 herdr plugin install takagiy/herdr-session-transfer
 ```
 
-The first build can take a few minutes.
 
 Then bind a key to the plugin's `transfer` action in `~/.config/herdr/config.toml`:
 
@@ -45,7 +44,6 @@ and reload the config:
 herdr server reload-config
 ```
 
-The action is not in the pane's right-click menu, because herdr does not show plugin actions there yet.
 
 ## Limitations
 
