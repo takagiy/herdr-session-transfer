@@ -6,7 +6,7 @@ Supported agents: Claude Code and Codex.
 
 ## Usage
 
-In an agent's pane, press the key bound in [Install](#install) and choose the agent to transfer to. The plugin then:
+In an agent's pane, press the [transfer key](#install) and choose the agent to transfer to. The plugin then:
 
 1. Copies the conversation into the chosen agent as a new session.
 2. Stops the agent in the pane.
