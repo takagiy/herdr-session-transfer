@@ -6,7 +6,7 @@ A [herdr](https://herdr.dev) plugin that moves the conversation in a pane to ano
 
 Supported agents: Claude Code and Codex.
 
-In a pane running a supported agent, press the key bound in [Install](#install) and choose the agent to move to. The plugin then:
+In the agent's pane, press the key bound in [Install](#install) and choose the agent to move to. The plugin then:
 
 1. Copies the conversation into the chosen agent as a new session. The original session is not changed, so you can still resume it later.
 2. Stops the agent in the pane, even if it is in the middle of a task.
