@@ -47,7 +47,7 @@ herdr server reload-config
 ## Limitations
 
 - herdr must know which session the pane holds. If it does not, you get a notification and the pane is not changed.
-- The agent must have been started from the pane's shell. If the agent is the pane's own process, stopping it would close the pane, so the plugin refuses.
+- The agent must have been started from the pane's shell.
 - If a step fails after the agent has stopped, the notification shows the command that resumes the copy. Run it in the pane.
 
 ## License
