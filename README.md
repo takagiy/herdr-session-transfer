@@ -4,7 +4,9 @@ A [herdr](https://herdr.dev) plugin that moves the conversation in a pane to ano
 
 ## Usage
 
-In a pane running Claude Code or Codex, press the key bound in [Install](#install) and choose the agent to move to. The plugin then:
+Supported agents: Claude Code and Codex.
+
+In a pane running a supported agent, press the key bound in [Install](#install) and choose the agent to move to. The plugin then:
 
 1. Copies the conversation into the chosen agent as a new session. The original session is not changed, so you can still resume it later.
 2. Stops the agent in the pane, even if it is in the middle of a task.
@@ -12,13 +14,11 @@ In a pane running Claude Code or Codex, press the key bound in [Install](#instal
 
 The conversion between agents is done by [txcript](https://github.com/skillsynchq/txcript).
 
-Supported agents: Claude Code and Codex.
-
 ## Requirements
 
 - herdr 0.9.4 or later.
-- herdr's integration for each agent you use, so herdr knows which session a pane holds: `herdr integration install claude`, `herdr integration install codex`.
-- `claude` and `codex` on your `PATH`.
+- herdr's integration for each agent you use (`herdr integration install <agent>`), so herdr knows which session a pane holds.
+- Each agent's CLI on your `PATH`.
 - A recent stable Rust toolchain (`cargo`). herdr builds the plugin when you install it.
 
 ## Install
