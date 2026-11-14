@@ -24,7 +24,6 @@ The conversion between agents is done by [txcript](https://github.com/skillsynch
 
 With a recent stable Rust toolchain (`cargo`) installed:
 
-
 ```sh
 herdr plugin install takagiy/herdr-session-transfer
 ```
