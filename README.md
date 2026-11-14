@@ -27,7 +27,6 @@ The conversion between agents is done by [txcript](https://github.com/skillsynch
 herdr plugin install takagiy/herdr-session-transfer
 ```
 
-
 Then bind a key to the plugin's `transfer` action in `~/.config/herdr/config.toml`:
 
 ```toml
@@ -43,7 +42,6 @@ and reload the config:
 ```sh
 herdr server reload-config
 ```
-
 
 ## Limitations
 
