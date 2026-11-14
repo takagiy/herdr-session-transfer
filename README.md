@@ -2,9 +2,9 @@
 
 A [herdr](https://herdr.dev) plugin that moves the conversation in a pane to another coding agent, in the same pane. Start a task in Claude Code, and continue the same conversation in Codex without leaving the pane, or the other way around.
 
-## What is this
+## Usage
 
-Press a key in a pane where Claude Code or Codex is running. A small popup lists the other agents. Pick one, and the plugin:
+Press the key you bound (see [Install](#install)) in a pane where Claude Code or Codex is running. A small popup lists the other agents. Choose one with the arrow keys and Enter, or press its number; Esc closes the popup without changing anything. After you choose, the plugin:
 
 1. Copies the conversation into the chosen agent as a new session. The original session is not changed, so you can still resume it later.
 2. Stops the agent in the pane, even if it is in the middle of a task.
@@ -46,10 +46,6 @@ herdr server reload-config
 ```
 
 The action is not in the pane's right-click menu, because herdr does not show plugin actions there yet.
-
-## Use
-
-In a pane running Claude Code or Codex, press the key. In the popup, choose with the arrow keys and Enter, or press the agent's number. Esc closes the popup without changing anything.
 
 ## Limitations
 
