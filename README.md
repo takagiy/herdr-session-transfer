@@ -12,7 +12,7 @@ In an agent's pane, press the [transfer key](#install) and choose the agent to t
 2. Stops the agent in the pane.
 3. Starts the chosen agent in the same pane, resuming the copy.
 
-The conversion between agents is done by [txcript](https://github.com/skillsynchq/txcript).
+Thanks to [txcript](https://github.com/skillsynchq/txcript), which does the conversion between agents.
 
 ## Requirements
 
