@@ -125,6 +125,19 @@ fn prepared_copy(
     }
     .to_string();
     copy.meta.timestamp = chrono::Utc::now();
+
+    if to == HarnessId::Codex {
+        // Imported thinking is history, not verified Codex reasoning.
+        for message in &mut copy.body {
+            for block in &mut message.content {
+                if let txcript::common::Block::Thinking { text, .. } = block {
+                    *block = txcript::common::Block::Text {
+                        text: format!("[Reasoning]\n{text}"),
+                    };
+                }
+            }
+        }
+    }
     // Stores file sessions by working directory, so a copy filed under a
     // directory that is gone would be invisible to the harness in the pane.
     if !copy
@@ -160,6 +173,86 @@ mod tests {
             },
             Vec::new(),
         )
+    }
+
+    fn source_with_thinking() -> Transcript<Common> {
+        use txcript::common::{Block, Message, Role};
+        let mut source = source(None);
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![
+                Block::Text {
+                    text: "Before".into(),
+                },
+                Block::Thinking {
+                    text: "Check the parser.\nThen the writer.".into(),
+                    signature: Some("source-signature".into()),
+                    encrypted: None,
+                },
+                Block::Text {
+                    text: "After".into(),
+                },
+            ],
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            model: None,
+            stop_reason: None,
+            usage: None,
+        };
+        source.body = vec![message.clone(), message];
+        source
+    }
+
+    #[test]
+    fn codex_copy_keeps_thinking_as_labeled_text_in_its_original_position() {
+        use txcript::{Codec, common::Block, harness::codex::Codex};
+        // Given a conversation containing thinking between ordinary text blocks
+        let source = source_with_thinking();
+        let original = source.clone();
+        // When it is prepared and converted into Codex's native format
+        let copy = prepared_copy(&source, HarnessId::Codex, Path::new("."));
+        let native = Codex::from_common(&copy).unwrap();
+        // Then thinking is preserved as text in place, no native reasoning is
+        // emitted, and the source is unchanged
+        for message in &copy.body {
+            assert_eq!(
+                message.content,
+                vec![
+                    Block::Text {
+                        text: "Before".into()
+                    },
+                    Block::Text {
+                        text: "[Reasoning]\nCheck the parser.\nThen the writer.".into()
+                    },
+                    Block::Text {
+                        text: "After".into()
+                    },
+                ]
+            );
+        }
+        assert_eq!(copy.body.len(), original.body.len());
+        assert_eq!(source, original);
+        assert!(
+            !native
+                .body
+                .iter()
+                .any(|line| line.kind == "response_item" && line.payload["type"] == "reasoning")
+        );
+        assert!(
+            native
+                .body
+                .iter()
+                .any(|line| line.payload.to_string().contains("[Reasoning]"))
+        );
+    }
+
+    #[test]
+    fn copy_to_another_harness_keeps_the_original_thinking_blocks() {
+        // Given a conversation with signed thinking blocks
+        let source = source_with_thinking();
+        // When it is prepared for Claude Code
+        let copy = prepared_copy(&source, HarnessId::ClaudeCode, Path::new("."));
+        // Then all content, including thinking and its signature, is preserved
+        assert_eq!(copy.body, source.body);
     }
 
     #[test]

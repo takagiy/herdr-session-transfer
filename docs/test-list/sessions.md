@@ -15,3 +15,5 @@ Copying a session between harness stores with the txcript library.
 - [x] When the session it was forked from was itself forked, the copier can follow the forks back to the first session.
 - [x] When the session it was forked from is missing, the copier can report that it was not found.
 - [x] When the forks lead back to a session already read, the copier can stop following them there and keep the history read so far.
+- [x] 会話を Codex にコピーすると、thinking は元の位置にラベル付きテキストとして残り、ネイティブの reasoning は出力されない。
+- [x] 会話をほかのハーネスにコピーすると、元の thinking ブロックが保たれる。
