@@ -1,7 +1,8 @@
 //! Copying sessions between harness stores with the txcript library.
 
 use std::path::{Path, PathBuf};
-use txcript::harness::{claude_code::ClaudeStore, codex::CodexStore};
+use txcript::harness::claude_code::ClaudeStore;
+use txcript::harness::codex::{Codex, CodexStore};
 use txcript::{Codec, Common, Harness, HarnessId, Store, Transcript, local};
 
 use crate::transfer::Sessions;
@@ -18,8 +19,8 @@ impl Sessions for TxcriptSessions {
         pane_cwd: &Path,
     ) -> Result<String, String> {
         let source = match from {
-            HarnessId::ClaudeCode => read_session(ClaudeStore::default_root(), id),
-            HarnessId::Codex => read_session(CodexStore::default_root(), id),
+            HarnessId::ClaudeCode => read_session(ClaudeStore::default_root(), id, |s, _| Ok(s)),
+            HarnessId::Codex => read_session(CodexStore::default_root(), id, with_history),
             _ => Err(format!("Cannot transfer sessions from {from}.")),
         }?;
         let written = local::write(to, &prepared_copy(&source, to, pane_cwd), None)
@@ -36,22 +37,78 @@ impl Sessions for TxcriptSessions {
     }
 }
 
-fn read_session<S: Store>(store: Option<S>, id: &str) -> Result<Transcript<Common>, String>
+/// The session `id` in `store`, completed by `whole` from the other sessions there.
+fn read_session<S: Store>(
+    store: Option<S>,
+    id: &str,
+    whole: impl Fn(
+        Transcript<S::H>,
+        &dyn Fn(&str) -> Result<Transcript<S::H>, String>,
+    ) -> Result<Transcript<S::H>, String>,
+) -> Result<Transcript<Common>, String>
 where
     S::H: Codec,
 {
     let harness = <S::H as Harness>::NAME;
     let store = store.ok_or_else(|| format!("Could not locate {harness} sessions."))?;
-    let found = store
+    let sessions = store
         .discover()
-        .map_err(|e| format!("Could not list {harness} sessions: {e}"))?
-        .into_iter()
-        .find(|session| session.meta.id == id)
-        .ok_or_else(|| format!("Session {id} was not found in {harness}."))?;
-    let native = store
-        .load(&found.reference)
-        .map_err(|e| format!("Could not read session {id}: {e}"))?;
+        .map_err(|e| format!("Could not list {harness} sessions: {e}"))?;
+    let load = |id: &str| {
+        let found = sessions
+            .iter()
+            .find(|session| session.meta.id == id)
+            .ok_or_else(|| format!("Session {id} was not found in {harness}."))?;
+        store
+            .load(&found.reference)
+            .map_err(|e| format!("Could not read session {id}: {e}"))
+    };
+    let native = whole(load(id)?, &load)?;
     S::H::to_common(&native).map_err(|e| format!("Could not convert session {id}: {e}"))
+}
+
+/// `session` with the history before its fork, which Codex keeps only in the
+/// session its `history_base` names.
+fn with_history(
+    session: Transcript<Codex>,
+    load: &dyn Fn(&str) -> Result<Transcript<Codex>, String>,
+) -> Result<Transcript<Codex>, String> {
+    let mut read = vec![session.meta.id.clone()];
+    with_history_after(session, load, &mut read)
+}
+
+/// [`with_history`], where `read` holds the sessions already on the way back.
+fn with_history_after(
+    mut session: Transcript<Codex>,
+    load: &dyn Fn(&str) -> Result<Transcript<Codex>, String>,
+    read: &mut Vec<String>,
+) -> Result<Transcript<Codex>, String> {
+    let Some(base) = session
+        .body
+        .first()
+        .and_then(|line| line.payload.get("history_base"))
+    else {
+        return Ok(session);
+    };
+    let thread_id = base["thread_id"].as_str().unwrap_or_default();
+    let end = base["end_ordinal_exclusive"].as_u64().unwrap_or_default();
+    if read.iter().any(|id| id == thread_id) {
+        return Ok(session);
+    }
+    read.push(thread_id.to_owned());
+    let history = with_history_after(load(thread_id)?, load, read)?
+        .body
+        .into_iter()
+        .filter(|line| {
+            line.kind != "session_meta"
+                && line
+                    .extra
+                    .get("ordinal")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|ordinal| ordinal < end)
+        });
+    session.body.splice(1..1, history);
+    Ok(session)
 }
 
 /// `source` as a new session for `to`'s store, which the source is left out of.
@@ -87,6 +144,7 @@ fn prepared_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use txcript::TextCodec;
     use txcript::common::Meta;
 
     fn source(cwd: Option<&str>) -> Transcript<Common> {
@@ -275,6 +333,123 @@ mod tests {
                 source_bytes
             );
         }
+    }
+
+    /// A Codex rollout of user prompts at their ordinals, forked from
+    /// `base` = (thread id, first ordinal not taken from it) when given.
+    fn rollout(id: &str, base: Option<(&str, u64)>, prompts: &[(u64, &str)]) -> Transcript<Codex> {
+        let mut meta = serde_json::json!({"id": id, "timestamp": "2026-11-15T00:00:00Z"});
+        if let Some((thread_id, end)) = base {
+            meta["history_base"] =
+                serde_json::json!({"thread_id": thread_id, "end_ordinal_exclusive": end});
+        }
+        let lines = std::iter::once(serde_json::json!({"type": "session_meta", "payload": meta}))
+            .chain(prompts.iter().map(|(ordinal, text)| {
+                serde_json::json!({"ordinal": ordinal, "type": "response_item", "payload": {
+                    "type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                }})
+            }))
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Codex::from_text(&lines).unwrap()
+    }
+
+    fn prompts(session: &Transcript<Codex>) -> Vec<String> {
+        Codex::to_common(session)
+            .unwrap()
+            .body
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|block| match block {
+                txcript::common::Block::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn codex_fork_gets_the_history_before_the_fork() {
+        // Given a Codex session forked from base-1 after its first prompt
+        let base = rollout("base-1", None, &[(1, "before the fork")]);
+        let fork = rollout("fork-1", Some(("base-1", 2)), &[(3, "after the fork")]);
+        let load = |id: &str| match id {
+            "base-1" => Ok(base.clone()),
+            _ => Err(format!("Session {id} was not found in codex.")),
+        };
+        // When the copier reads the fork
+        let whole = with_history(fork, &load).unwrap();
+        // Then the history before the fork comes first, then the fork's own
+        assert_eq!(prompts(&whole), ["before the fork", "after the fork"]);
+        assert_eq!(whole.meta.id, "fork-1");
+    }
+
+    #[test]
+    fn what_the_base_said_after_the_fork_is_left_out() {
+        // Given base-1 went on after fork-1 was forked from it at ordinal 2
+        let base = rollout(
+            "base-1",
+            None,
+            &[(1, "before the fork"), (2, "base went on")],
+        );
+        let fork = rollout("fork-1", Some(("base-1", 2)), &[(3, "after the fork")]);
+        let load = |_: &str| Ok(base.clone());
+        // When the copier reads the fork
+        let whole = with_history(fork, &load).unwrap();
+        // Then only the history before the fork point is taken from base-1
+        assert_eq!(prompts(&whole), ["before the fork", "after the fork"]);
+    }
+
+    #[test]
+    fn forks_are_followed_back_to_the_first_session() {
+        // Given fork-2 forked from fork-1, which was forked from base-1
+        let base = rollout("base-1", None, &[(1, "in the first session")]);
+        let fork = rollout("fork-1", Some(("base-1", 2)), &[(3, "in the first fork")]);
+        let fork_of_fork = rollout("fork-2", Some(("fork-1", 4)), &[(5, "in the second fork")]);
+        let load = |id: &str| match id {
+            "base-1" => Ok(base.clone()),
+            "fork-1" => Ok(fork.clone()),
+            _ => Err(format!("Session {id} was not found in codex.")),
+        };
+        // When the copier reads the second fork
+        let whole = with_history(fork_of_fork, &load).unwrap();
+        // Then the history from every session before it comes first, in order
+        assert_eq!(
+            prompts(&whole),
+            [
+                "in the first session",
+                "in the first fork",
+                "in the second fork"
+            ]
+        );
+    }
+
+    #[test]
+    fn fork_whose_source_is_missing_is_not_read_without_its_history() {
+        // Given a fork whose source session is not in the store
+        let fork = rollout("fork-1", Some(("base-1", 2)), &[(3, "after the fork")]);
+        let load = |id: &str| Err(format!("Session {id} was not found in codex."));
+        // When the copier reads the fork
+        let result = with_history(fork, &load);
+        // Then it reports the missing source instead of a fork without its history
+        assert!(result.is_err_and(|why| why.contains("base-1") && why.contains("not found")));
+    }
+
+    #[test]
+    fn forks_that_loop_are_followed_until_they_repeat() {
+        // Given fork-a forked from fork-b, which names fork-a as its own source
+        let fork_a = rollout("fork-a", Some(("fork-b", 4)), &[(5, "in fork-a")]);
+        let fork_b = rollout("fork-b", Some(("fork-a", 2)), &[(3, "in fork-b")]);
+        let load = |id: &str| match id {
+            "fork-a" => Ok(fork_a.clone()),
+            "fork-b" => Ok(fork_b.clone()),
+            _ => Err(format!("Session {id} was not found in codex.")),
+        };
+        // When the copier reads fork-a
+        let whole = with_history(fork_a.clone(), &load).unwrap();
+        // Then it stops at fork-b, whose source was already read, and keeps the history up to there
+        assert_eq!(prompts(&whole), ["in fork-b", "in fork-a"]);
     }
 
     #[test]
