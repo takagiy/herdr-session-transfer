@@ -19,9 +19,11 @@ The conversion between agents is done by [txcript](https://github.com/skillsynch
 - herdr 0.9.4 or later.
 - herdr's integration for each agent you use (`herdr integration install <agent>`).
 - Each agent's CLI on your `PATH`.
-- A recent stable Rust toolchain (`cargo`). herdr builds the plugin when you install it.
 
 ## Install
+
+With a recent stable Rust toolchain (`cargo`) installed:
+
 
 ```sh
 herdr plugin install takagiy/herdr-session-transfer
