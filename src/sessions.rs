@@ -1,7 +1,8 @@
 //! Copying sessions between harness stores with the txcript library.
 
 use std::path::{Path, PathBuf};
-use txcript::{Common, HarnessId, Transcript, local};
+use txcript::harness::{claude_code::ClaudeStore, codex::CodexStore};
+use txcript::{Codec, Common, Harness, HarnessId, Store, Transcript, local};
 
 use crate::transfer::Sessions;
 
@@ -16,14 +17,11 @@ impl Sessions for TxcriptSessions {
         to: HarnessId,
         pane_cwd: &Path,
     ) -> Result<String, String> {
-        let found = local::discover_harness(from)
-            .map_err(|e| format!("Could not list {} sessions: {e}", from.as_str()))?
-            .into_iter()
-            .find(|session| session.meta.id == id)
-            .ok_or_else(|| format!("Session {id} was not found in {}.", from.as_str()))?;
-        let source = found
-            .read()
-            .map_err(|e| format!("Could not read session {id}: {e}"))?;
+        let source = match from {
+            HarnessId::ClaudeCode => read_session(ClaudeStore::default_root(), id),
+            HarnessId::Codex => read_session(CodexStore::default_root(), id),
+            _ => Err(format!("Cannot transfer sessions from {from}.")),
+        }?;
         let written = local::write(to, &prepared_copy(&source, to, pane_cwd), None)
             .map_err(|e| format!("Could not copy session {id} into {}: {e}", to.as_str()))?;
         Ok(written.id)
@@ -36,6 +34,24 @@ impl Sessions for TxcriptSessions {
             .collect::<Vec<_>>()
             .join(" ")
     }
+}
+
+fn read_session<S: Store>(store: Option<S>, id: &str) -> Result<Transcript<Common>, String>
+where
+    S::H: Codec,
+{
+    let harness = <S::H as Harness>::NAME;
+    let store = store.ok_or_else(|| format!("Could not locate {harness} sessions."))?;
+    let found = store
+        .discover()
+        .map_err(|e| format!("Could not list {harness} sessions: {e}"))?
+        .into_iter()
+        .find(|session| session.meta.id == id)
+        .ok_or_else(|| format!("Session {id} was not found in {harness}."))?;
+    let native = store
+        .load(&found.reference)
+        .map_err(|e| format!("Could not read session {id}: {e}"))?;
+    S::H::to_common(&native).map_err(|e| format!("Could not convert session {id}: {e}"))
 }
 
 /// `source` as a new session for `to`'s store, which the source is left out of.
@@ -147,6 +163,118 @@ mod tests {
         let copy = prepared_copy(&source, HarnessId::Codex, Path::new(&reported));
         // Then the copy's working directory has no trailing separator
         assert_eq!(copy.meta.cwd.as_deref(), dir.to_str());
+    }
+
+    #[test]
+    fn copied_conversations_preserve_text_and_tool_pairs() {
+        use txcript::common::{Block, Message, Role, Tool, ToolOutput};
+
+        // Given isolated stores in a child process, without changing this process's environment
+        let root = match std::env::var_os("HERDR_TRANSFER_TEST_ROOT") {
+            Some(root) => PathBuf::from(root),
+            None => {
+                let temp = std::env::temp_dir();
+                assert!(temp.is_absolute());
+                let root = temp.join(format!("herdr-copy-{}", uuid::Uuid::new_v4()));
+                std::fs::create_dir(&root).unwrap();
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "sessions::tests::copied_conversations_preserve_text_and_tool_pairs",
+                        "--nocapture",
+                    ])
+                    .env("HERDR_TRANSFER_TEST_ROOT", &root)
+                    .env("CLAUDE_CONFIG_DIR", root.join("claude"))
+                    .env("CODEX_HOME", root.join("codex"))
+                    .output()
+                    .unwrap();
+                assert_eq!(root.parent(), Some(temp.as_path()));
+                std::fs::remove_dir_all(&root).unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return;
+            }
+        };
+        let message = |role, content| Message {
+            role,
+            content,
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            model: None,
+            stop_reason: None,
+            usage: None,
+        };
+        let mut conversation = source(root.to_str());
+        conversation.body = vec![
+            message(
+                Role::User,
+                vec![Block::Text {
+                    text: "内容を調べて".into(),
+                }],
+            ),
+            message(
+                Role::Assistant,
+                vec![Block::ToolUse {
+                    id: "read-1".into(),
+                    tool: Tool::Read {
+                        file_path: "notes.txt".into(),
+                        offset: None,
+                        limit: None,
+                    },
+                }],
+            ),
+            message(
+                Role::User,
+                vec![Block::ToolResult {
+                    tool_use_id: "read-1".into(),
+                    content: ToolOutput::Text("保存された本文".into()),
+                    is_error: false,
+                }],
+            ),
+            message(
+                Role::Assistant,
+                vec![Block::Text {
+                    text: "確認しました".into(),
+                }],
+            ),
+        ];
+        let find = |harness, id: &str| {
+            local::discover_harness(harness)
+                .unwrap()
+                .into_iter()
+                .find(|session| session.meta.id == id)
+                .unwrap()
+        };
+        for (from, to) in [
+            (HarnessId::ClaudeCode, HarnessId::Codex),
+            (HarnessId::Codex, HarnessId::ClaudeCode),
+        ] {
+            conversation.meta.id = uuid::Uuid::now_v7().to_string();
+            let original = local::write(from, &conversation, None).unwrap();
+            let source_session = find(from, &original.id);
+            let source_bytes = std::fs::read(source_session.location()).unwrap();
+            // When the real copier converts and writes the conversation
+            let copy_id = TxcriptSessions.copy(from, &original.id, to, &root).unwrap();
+            let copy = find(to, &copy_id).read().unwrap();
+            // Then text and the complete tool pair survive, while the source file is unchanged
+            let actual: Vec<_> = copy.body.iter().map(|m| (&m.role, &m.content)).collect();
+            let expected: Vec<_> = conversation
+                .body
+                .iter()
+                .map(|m| (&m.role, &m.content))
+                .collect();
+            assert_eq!(actual, expected, "{from} -> {to}");
+            assert_eq!(copy.tool_pairs().unwrap(), vec![(1, 2)]);
+            assert_ne!(copy_id, original.id);
+            assert_eq!(copy.meta.id, copy_id);
+            assert_eq!(
+                std::fs::read(source_session.location()).unwrap(),
+                source_bytes
+            );
+        }
     }
 
     #[test]

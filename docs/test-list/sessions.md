@@ -8,3 +8,5 @@ Copying a session between harness stores with the txcript library.
 - [x] When the source session's working directory exists, the copy can keep it.
 - [x] When the pane's working directory ends with a path separator, the copy can use it without the separator.
 - [x] When the source session id is not in its harness's store, the copier can report that it was not found.
+- [x] When a conversation is copied between Claude Code and Codex in either direction, the copy can be read back with its text and its tool calls paired with their results.
+- [ ] When the copier looks for the source session, it can scan only that harness's store.
