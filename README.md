@@ -46,7 +46,7 @@ herdr server reload-config
 
 ## Limitations
 
-- herdr must know which session the pane holds. If it does not, you get a notification and the pane is not changed.
+- herdr must know which session the pane holds.
 - The agent must have been started from the pane's shell.
 
 ## License
