@@ -9,7 +9,7 @@ Supported agents: Claude Code and Codex.
 In an agent's pane, press the [transfer key](#install) and choose the agent to transfer to. The plugin then:
 
 1. Copies the conversation into the chosen agent as a new session.
-2. Stops the agent in the pane.
+2. Asks the agent to exit normally and waits for the pane's shell to return.
 3. Starts the chosen agent in the same pane, resuming the copy.
 
 Thanks to [txcript](https://github.com/skillsynchq/txcript), which does the conversion between agents.
@@ -48,6 +48,7 @@ herdr server reload-config
 
 - herdr must know which session the pane holds.
 - The agent must have been started from the pane's shell.
+- Normal exit presses Ctrl+C through herdr until the pane's shell returns. If the agent does not exit within five seconds, the transfer stops without force-killing it.
 
 ## License
 

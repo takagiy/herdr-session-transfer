@@ -49,7 +49,6 @@ struct ProcessResult {
 #[derive(Deserialize)]
 pub struct Processes {
     shell_pid: Option<u32>,
-    foreground_process_group_id: Option<u32>,
     foreground_processes: Vec<Process>,
 }
 
@@ -59,14 +58,9 @@ struct Process {
 }
 
 impl Processes {
-    /// The foreground processes other than the shell, so stopping them leaves
-    /// the pane open.
-    pub fn to_stop(&self) -> Vec<u32> {
-        self.foreground_processes
-            .iter()
-            .map(|p| p.pid)
-            .filter(|&pid| Some(pid) != self.shell_pid)
-            .collect()
+    fn shell_is_foreground(&self) -> bool {
+        self.foreground_processes.len() == 1
+            && self.shell_pid == Some(self.foreground_processes[0].pid)
     }
 
     /// Whether the foreground holds a program started from the shell, rather
@@ -74,7 +68,10 @@ impl Processes {
     pub fn started_from_shell(&self) -> bool {
         self.shell_pid.is_some()
             && !self.foreground_processes.is_empty()
-            && self.to_stop().len() == self.foreground_processes.len()
+            && self
+                .foreground_processes
+                .iter()
+                .all(|p| Some(p.pid) != self.shell_pid)
     }
 }
 
@@ -144,13 +141,19 @@ impl Herdr for HerdrCli {
     }
 
     fn stop_agent(&self) -> Result<(), String> {
-        kill(&self.processes()?)?;
+        // One key per request: Claude Code reads Ctrl+C bytes that arrive together as one press.
+        // Claude Code attached to a background session detaches to agent view first, so it needs more presses.
         let deadline = Instant::now() + Duration::from_secs(5);
-        while self.processes()?.started_from_shell() {
+        let mut exit_request = Ok(());
+        while !self.processes()?.shell_is_foreground() {
             if Instant::now() > deadline {
-                return Err("The agent did not stop within 5 seconds.".into());
+                exit_request?;
+                return Err("The agent did not exit within 5 seconds. Exit it normally before trying again.".into());
             }
-            std::thread::sleep(Duration::from_millis(100));
+            exit_request = exit_request.and_then(|()| {
+                self.call(&["agent", "send-keys", &self.pane_id, "ctrl+c"])
+                    .map(drop)
+            });
         }
         Ok(())
     }
@@ -158,34 +161,6 @@ impl Herdr for HerdrCli {
     fn run(&self, command: &str) -> Result<(), String> {
         self.call(&["pane", "run", &self.pane_id, command])
             .map(drop)
-    }
-}
-
-/// Force the processes in front of the shell to exit.
-fn kill(processes: &Processes) -> Result<(), String> {
-    let status = if cfg!(windows) {
-        let mut cmd = Command::new("taskkill");
-        cmd.args(["/T", "/F"]);
-        for pid in processes.to_stop() {
-            cmd.args(["/PID", &pid.to_string()]);
-        }
-        cmd.output()
-    } else {
-        let group = processes
-            .foreground_process_group_id
-            .ok_or("herdr did not report the agent's process group.")?;
-        Command::new("kill")
-            .args(["-KILL", "--", &format!("-{group}")])
-            .output()
-    }
-    .map_err(|e| format!("could not stop the agent: {e}"))?;
-    if status.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "could not stop the agent: {}",
-            String::from_utf8_lossy(&status.stderr).trim()
-        ))
     }
 }
 
@@ -252,14 +227,162 @@ mod tests {
     }
 
     #[test]
-    fn shell_is_left_out_of_the_processes_to_stop() {
+    fn shell_beside_another_process_is_not_a_separate_foreground_agent() {
         // Given `pane process-info` reports the shell beside another process
         let json = r#"{"result":{"process_info":{"foreground_processes":[{"pid":32676},{"pid":8948}],"shell_pid":32676}}}"#;
-        // When the reader lists the processes to stop
+        // When the reader checks whether an agent is running in front of the shell
         let processes = read_processes(json).unwrap();
-        // Then only the other process is listed
-        assert_eq!(processes.to_stop(), [8948]);
+        // Then a group containing the shell is not a separate foreground agent
+        assert!(!processes.started_from_shell());
     }
+    #[test]
+    fn missing_foreground_processes_do_not_mean_the_shell_is_ready() {
+        // Given the foreground process is temporarily unknown during shutdown
+        let processes = read_processes(
+            r#"{"result":{"process_info":{"shell_pid":42,"foreground_processes":[]}}}"#,
+        )
+        .unwrap();
+        // When transfer checks whether it can start the next harness
+        // Then it keeps waiting for the shell itself
+        assert!(!processes.shell_is_foreground());
+    }
+
+    #[test]
+    fn only_the_shell_in_the_foreground_is_ready_for_the_next_harness() {
+        // Given the agent has exited and the shell is the only foreground process
+        let processes = read_processes(
+            r#"{"result":{"process_info":{"shell_pid":42,"foreground_processes":[{"pid":42}]}}}"#,
+        )
+        .unwrap();
+        // When transfer checks whether it can start the next harness
+        // Then the shell is ready
+        assert!(processes.shell_is_foreground());
+    }
+
+    /// A herdr whose agent exits after `exit_presses` Ctrl+C presses. Press `n` fails with
+    /// the error in `failures` when listed there.
+    #[cfg(windows)]
+    fn fake_herdr(exit_presses: usize, failures: &[(usize, &str)]) -> (HerdrCli, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("herdr-transfer-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        for (press, error) in failures {
+            std::fs::write(dir.join(format!("fail{press}")), error).unwrap();
+        }
+        let shell =
+            r#"{"result":{"process_info":{"shell_pid":42,"foreground_processes":[{"pid":42}]}}}"#;
+        let agent = r#"{"result":{"process_info":{"shell_pid":42,"foreground_process_group_id":4294967294,"foreground_processes":[{"pid":4294967294}]}}}"#;
+        let script = format!(
+            r#"@echo off
+cd /d "{}"
+echo %*>> calls
+if "%1 %2"=="agent send-keys" goto keys
+if "%1 %2"=="pane process-info" goto info
+echo Unexpected call >&2
+exit /b 1
+:keys
+call :count
+set /a n+=1
+>presses echo %n%
+if exist fail%n% (type fail%n% & exit /b 1)
+exit /b 0
+:info
+call :count
+if %n% GEQ {exit_presses} (echo {shell}) else (echo {agent})
+exit /b 0
+:count
+set n=0
+if exist presses set /p n=<presses
+exit /b 0
+"#,
+            dir.display()
+        );
+        let bin = dir.join("herdr.cmd");
+        std::fs::write(&bin, script).unwrap();
+        (
+            HerdrCli {
+                bin,
+                pane_id: "w1:p1".into(),
+            },
+            dir,
+        )
+    }
+
+    #[cfg(windows)]
+    fn presses(dir: &std::path::Path) -> usize {
+        let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+        calls.matches("agent send-keys w1:p1 ctrl+c\r\n").count()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transfer_presses_ctrl_c_until_the_shell_returns() {
+        // Given an agent that exits on its second Ctrl+C
+        let (herdr, dir) = fake_herdr(2, &[]);
+        // When transfer stops the agent
+        herdr.stop_agent().unwrap();
+        // Then it presses Ctrl+C through the agent API, once per request, until the shell returns
+        assert_eq!(presses(&dir), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn agent_view_on_the_way_out_is_left_with_more_ctrl_c() {
+        // Given Claude Code attached to a background session: two presses detach to agent view, two more leave it
+        let (herdr, dir) = fake_herdr(4, &[]);
+        // When transfer stops the agent
+        herdr.stop_agent().unwrap();
+        // Then it keeps pressing Ctrl+C until the shell returns
+        assert_eq!(presses(&dir), 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn first_exit_key_does_not_send_a_second_key_to_the_shell() {
+        // Given an agent that exits on the first Ctrl+C
+        let (herdr, dir) = fake_herdr(1, &[]);
+        // When transfer stops the agent
+        herdr.stop_agent().unwrap();
+        // Then it sends no second key after the agent has exited
+        assert_eq!(presses(&dir), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exit_between_the_check_and_second_key_is_successful() {
+        // Given an agent that exits just as the second key reaches it
+        let (herdr, dir) = fake_herdr(2, &[(2, r#"{"error":"agent_not_ready"}"#)]);
+        // When the second key request reports agent_not_ready
+        let result = herdr.stop_agent();
+        // Then the returned shell makes the normal exit successful
+        assert_eq!(presses(&dir), 2);
+        assert_eq!(result, Ok(()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_key_is_reported_when_the_agent_is_still_running() {
+        // Given an agent that stays in front of its shell
+        let (herdr, dir) = fake_herdr(1000, &[(2, r#"{"error":"transport failed"}"#)]);
+        // When the second key request fails
+        let error = herdr.stop_agent().unwrap_err();
+        // Then the original API error is reported and no further key is sent
+        assert!(error.contains("transport failed"), "{error}");
+        assert_eq!(presses(&dir), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn agent_that_does_not_exit_normally_is_left_running() {
+        // Given an agent that ignores the normal exit request
+        let (herdr, dir) = fake_herdr(1000, &[]);
+        // When transfer tries to stop it
+        let error = herdr.stop_agent().unwrap_err();
+        // Then it reports the failure without starting another harness
+        assert!(error.contains("did not exit"), "{error}");
+        let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+        assert!(!calls.contains("pane run"), "{calls}");
+    }
+
     #[test]
     fn picker_context_gives_the_pane_under_it() {
         // Given the plugin context herdr gives a popup opened over pane w3:p2A
