@@ -1,6 +1,6 @@
 # herdr-session-transfer
 
-A [herdr](https://herdr.dev) plugin that transfers the session in a pane to another coding agent, in the same pane. Start a task in Claude Code, and continue the same conversation in Codex without leaving the pane, or the other way around.
+A [herdr](https://herdr.dev) plugin that transfers the session in a pane to another coding agent, in the same pane.
 
 Supported agents: Claude Code and Codex.
 
