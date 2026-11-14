@@ -1,4 +1,4 @@
-//! Moving the conversation in one pane to another harness, in that pane.
+//! Transferring the session in one pane to another harness, in that pane.
 
 use std::path::{Path, PathBuf};
 use txcript::HarnessId;
@@ -64,9 +64,11 @@ pub fn transfer(herdr: &impl Herdr, sessions: &impl Sessions, to: HarnessId) -> 
     let copy = sessions.copy(from, &id, to, &pane.cwd)?;
     let resume = sessions.resume_command(to, &copy);
     // Past this point the agent may be gone, so say how to reach the copy.
+    herdr.stop_agent().map_err(|why| {
+        format!("{why} The copied session can be resumed with `{resume}` after exiting the current agent.")
+    })?;
     herdr
-        .stop_agent()
-        .and_then(|()| herdr.run(&resume))
+        .run(&resume)
         .map_err(|why| format!("{why} To continue, run `{resume}` in the pane."))
 }
 
@@ -92,6 +94,7 @@ mod tests {
         session_id: Option<&'static str>,
         started_from_shell: bool,
         run_fails: bool,
+        stop_fails: bool,
         log: &'a Log,
     }
 
@@ -108,6 +111,9 @@ mod tests {
         }
         fn stop_agent(&self) -> Result<(), String> {
             self.log.push("stop agent".into());
+            if self.stop_fails {
+                return Err("The agent did not exit".into());
+            }
             Ok(())
         }
         fn run(&self, command: &str) -> Result<(), String> {
@@ -150,6 +156,7 @@ mod tests {
             session_id: Some("session-1"),
             started_from_shell: true,
             run_fails: false,
+            stop_fails: false,
             log,
         }
     }
@@ -189,6 +196,21 @@ mod tests {
         log.entries()
             .iter()
             .all(|entry| entry != "stop agent" && !entry.starts_with("run "))
+    }
+
+    #[test]
+    fn failed_normal_exit_does_not_start_the_target_harness() {
+        // Given an agent that does not exit normally
+        let log = Log::default();
+        let herdr = FakeHerdr {
+            stop_fails: true,
+            ..claude_pane(&log)
+        };
+        // When the user transfers its session
+        let error = transfer(&herdr, &working_sessions(&log), HarnessId::Codex).unwrap_err();
+        // Then the next harness is not started and recovery requires exiting first
+        assert!(!log.entries().iter().any(|entry| entry.starts_with("run ")));
+        assert!(error.contains("after exiting the current agent"), "{error}");
     }
 
     #[test]

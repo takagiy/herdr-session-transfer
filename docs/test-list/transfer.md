@@ -8,3 +8,4 @@ What the user sees after picking "Transfer to <harness>" on a pane.
 - [x] When the agent is the pane's own process rather than a program started from its shell, the user can see why nothing happened and the pane can keep its agent.
 - [x] When the conversation cannot be copied to the target harness, the user can see why and the pane can keep its agent.
 - [x] When the pane cannot start the target harness after its agent stopped, the user can see the command that continues the conversation.
+- [x] When the agent does not exit normally, the pane can leave the target harness unstarted and the user can see how to resume the copy after exiting the agent.
